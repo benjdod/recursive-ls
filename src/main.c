@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <dirent.h>
+#include <stdarg.h>
 #include <errno.h>
 #include "filenamebuffer.h"
 #include "chartrie.h"
@@ -10,6 +11,11 @@
 #define HIDE_HIDDEN 0x01
 #define USE_EXCLUDES 0x02
 #define CLEAN_PRINT 0x04
+#define ESC_COLOR 0x08
+
+#define TERM_BRIGHTRED_COLOR() printf("\033[1;31m");
+#define TERM_CYAN_COLOR() printf("\033[36m");
+#define TERM_RESET_COLOR() printf("\033[0m");
 
 /* flag bits
  * 0: hides hidden files
@@ -20,20 +26,104 @@ unsigned int flag;
 unsigned int depth;
 struct filenamebuffer fb;
 chartrie *trie;
+char dirpath[PATH_MAX];
 
 // forward declaring listdir
 int listdir(const char *);
 
-void printerror(const char *msg) {
-	printf("Error: %s\n",msg);
+void printerror(const char *format, ...) {
+	va_list args;
+	if (flag & ESC_COLOR) TERM_BRIGHTRED_COLOR();
+	printf("Error: ");
+	vprintf(format, args);
+	putchar('\n');
+	if (flag & ESC_COLOR) TERM_RESET_COLOR();
 }
 
-void printwarning(const char *msg) {
-	printf("Warning: %s\n",msg);
+void printwarning(const char *format, ...) {
+	va_list args;
+	if (flag & ESC_COLOR) TERM_CYAN_COLOR();
+	printf("Warning: ");
+	vprintf(format, args);
+	putchar('\n');
+	if (flag & ESC_COLOR) TERM_RESET_COLOR();
+}
+
+void printprompt() {
+	printf("Enter a directory.\n");
 }
 
 void printusage() {
-	printf("Enter a directory.\n");
+	printf("efind [options] directory\n");
+}
+
+void printversion() {
+	printf("efind (v. 0.1.0)\n");
+	printf("a new and improved find utility...\n");
+}
+
+void printinvalidoption(const char *badopt) {
+	printf("Invalid option: \"%s\"",badopt);
+}
+
+// returns: negative values for errors, positive values for no ops, 0 for continue
+int processargs(int argc, char **argv) {
+
+	// initial conditions
+	flag = 0;
+	flag = HIDE_HIDDEN | USE_EXCLUDES | CLEAN_PRINT;
+
+	if (argc < 2) {
+		printprompt();
+	 	return -1;
+	}
+	if (argv[1][0] == '\0') {
+		printprompt();
+		return -1;
+	}
+
+	unsigned int i;
+	unsigned int j;
+	const char *arg;
+	
+	for (i = 1; i < argc; i++) {
+		arg = argv[i];
+
+		if (arg[0] == '-') {
+			j = 1;
+			while (arg[j] != '\0') {
+				switch (arg[j]) {
+					case 'h':
+						printusage();
+						return 1;
+					case 'v':
+						printversion();
+						return 2;
+					case 'a':
+						// show hidden files
+						flag &= ~HIDE_HIDDEN;
+						break;
+					case 'A':
+						// show hidden files and ignore excludes
+						flag &= ~HIDE_HIDDEN;
+						flag &= ~USE_EXCLUDES;
+						break;
+					case 'f':
+						flag &= ~CLEAN_PRINT;
+						break;
+					default:
+						printinvalidoption(arg);
+						return -1;
+				}
+				j++;
+			}
+		} else {
+			strcpy(dirpath,arg);
+		}
+	}
+
+	return 0;
+
 }
 
 void init() {
@@ -55,23 +145,34 @@ void init() {
 		fpbuf[i] = '\0';
 		strcat(fpbuf+i, ".efind.excludes");
 
+		// TODO: move this opening stuff to a new function somewhere else
 		FILE *excludesfp = fopen(fpbuf,"r");
-		if (excludesfp == NULL) {
+		if (excludesfp) {
+			errno = 0;
+			while (fgets(buf,PATH_MAX,excludesfp)) {
+				addstrictstring(buf,trie);
+			}
+
+		//	printf("added strings");
+			if (errno) {
+				// fgetc error checking
+			}
+
+			fclose(excludesfp);
+		} else {
 			// TODO: finish warnings here...
-			printwarning("excludes file could not be located, proceeding without");
+			printwarning("excludes file could not be located, proceeding without.\nEnsure that there is a .efind.excludes file in your home directory");
 		}
-		
-		errno = 0;
-		while (fgets(buf,PATH_MAX,excludesfp)) {
-			addstrictstring(buf,trie);
-		}
+	}
 
-	//	printf("added strings");
-		if (errno) {
-			// fgetc error checking
+	// handles coloring flag
+	if (flag & ESC_COLOR) {
+		const char *term = getenv("TERM");
+		if (strstr(term,"xterm-color") || strstr(term,"-256color")) {
+			; //we're cool
+		} else {
+			flag &= ~ESC_COLOR;
 		}
-
-		fclose(excludesfp);
 	}
 
 	return;
@@ -202,25 +303,11 @@ int listdir(const char *name) {
 
 int main(int argc, char **argv) {
 
-	flag = 0;
-	flag |= 0x01;	// hide hidden files and folders
-	//flag |= 0x02;	// use excludes
-	flag |= 0x04;	// use clean printing
+	int r = processargs(argc, argv);
+	if (r < 0) return r;
+	else if (r) return 0;
 
 	init();
-
-	char *dirpath;
-
-	if (argc < 2 || argc > 3) {
-		printusage();
-	 	return -1;
-	}
-	if (argv[1][0] == '\0') {
-		printusage();
-		return -1;
-	}
-
-	dirpath = argv[1];
 
 	append(dirpath,&fb);
 	listdir(dirpath);

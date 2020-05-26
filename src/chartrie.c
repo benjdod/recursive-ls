@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <ctype.h>
 #include "chartrie.h"
 
 chartrie *makenode(char c) {
@@ -66,11 +67,19 @@ void addstring(const char *s, chartrie *head) {
 
 void addstrictstring(const char *s, chartrie *head) {
 	unsigned int i;
+	char whtflg = 1;
 
 	for (i = 0; s[i] != '\0'; i++) {
+		if (whtflg) {
+			if (isspace(s[i])) continue;
+			if (s[i] == '#') return;
+		}
 		if (s[i] == '\n' || s[i] == '\r') continue;
 		head = addtonode(s[i],head);
+		whtflg = 0;
 	}
+
+	return;
 }
 
 unsigned int match(const char *s, chartrie *t) {
