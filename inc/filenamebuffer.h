@@ -9,5 +9,6 @@ struct filenamebuffer {
 
 void append(const char *, struct filenamebuffer *);
 void removelast(struct filenamebuffer *);
+char *lastitem(char *, unsigned int, struct filenamebuffer *);
 
 #endif

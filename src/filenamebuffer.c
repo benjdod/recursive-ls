@@ -20,3 +20,17 @@ void removelast(struct filenamebuffer *fb) {
 	fb->seq[fb->pos] = '\0';
 	return;
 }
+
+char *lastitem(char *space, unsigned int size, struct filenamebuffer *fb) {
+
+	unsigned int i;
+	unsigned int j;
+	for (i = 0; i < fb->last; i++) {
+		space[i] = ' ';
+	}
+	for (j = 0; i < fb->pos && i < size; i++) {
+		space[i] = fb->seq[j++];
+	}
+
+	return space;
+}

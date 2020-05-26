@@ -4,11 +4,12 @@
 #include <dirent.h>
 #include <errno.h>
 #include "filenamebuffer.h"
-#include "excludelist.h"
+#include "chartrie.h"
 
 #define MAX_DEPTH 20
 #define HIDE_HIDDEN 0x01
 #define USE_EXCLUDES 0x02
+#define CLEAN_PRINT 0x04
 
 /* flag bits
  * 0: hides hidden files
@@ -18,7 +19,7 @@
 unsigned int flag;
 unsigned int depth;
 struct filenamebuffer fb;
-struct excludelist ex;
+chartrie *trie;
 
 // forward declaring listdir
 int listdir(const char *);
@@ -40,19 +41,38 @@ void init() {
 	fb.seq = malloc((PATH_MAX + 1) * sizeof(char));
 	fb.pos = 0;
 
+	// sets up our excludes trie if we need it
 	if (flag & USE_EXCLUDES) {
-		// looks for ~/.les.excludes
-		FILE *excludesfp = fopen("~/.les.excludes","r");
+		trie = makenode('\0');
+		char buf[PATH_MAX + 1];
+		char fpbuf[PATH_MAX + 1];
 
+		// putting the path together for the excludes file
+		strcpy(fpbuf,getenv("HOME"));
+		short i = 0;
+		while (fpbuf[i] != '\0') i++;
+		fpbuf[i++] = '/';
+		fpbuf[i] = '\0';
+		strcat(fpbuf+i, ".efind.excludes");
+
+		FILE *excludesfp = fopen(fpbuf,"r");
 		if (excludesfp == NULL) {
 			// TODO: finish warnings here...
 			printwarning("excludes file could not be located, proceeding without");
 		}
+		
+		errno = 0;
+		while (fgets(buf,PATH_MAX,excludesfp)) {
+			addstrictstring(buf,trie);
+		}
 
+	//	printf("added strings");
+		if (errno) {
+			// fgetc error checking
+		}
 
+		fclose(excludesfp);
 	}
-
-	init_excludelist(&ex);
 
 	return;
 }
@@ -68,7 +88,7 @@ int listdir(const char *name) {
 	if (depth >= MAX_DEPTH) return 0;
 
 	if (flag & USE_EXCLUDES) {
-
+		if (match(name,trie)) return 0;
 	}
 
 	// opening stream and erro checking
@@ -140,15 +160,38 @@ int listdir(const char *name) {
 			return 0;
 		}
 
-		// recurse to subdirectories
-		if ((strcmp(dp->d_name,".") == 0 || strcmp(dp->d_name,"..") == 0) || matchexclude(dp->d_name))
+		if ((strcmp(dp->d_name,".") == 0 || strcmp(dp->d_name,"..") == 0))
 			; // do nothing
 		else {
+			if (flag & USE_EXCLUDES) {
+				if (match(dp->d_name,trie)) continue;
+			}
+			if (flag & HIDE_HIDDEN) {
+				if (dp->d_name[0] == '.') continue;
+			}
 			append(dp->d_name,&fb);
-			printf("%s\n",fb.seq);
-			depth++;
-			listdir(fb.seq);
-			depth--;
+
+			if (flag & CLEAN_PRINT) {
+				unsigned int i = 0;
+				unsigned int dcount = 0;
+				char c;
+				while ((c = fb.seq[i]) != '\0') {
+					if (dcount > depth) putchar(c);
+					else putchar(' ');
+					if (c == '/') dcount++;
+					i++;
+				}
+				if (dp->d_type == DT_DIR) putchar('/');
+				putchar('\n');
+			} else {
+				printf("%s\n",fb.seq);
+			}
+
+			if (dp->d_type == DT_DIR) {
+				depth++;
+				listdir(fb.seq);
+				depth--;
+			}
 			removelast(&fb);
 		}
 	}
@@ -159,11 +202,12 @@ int listdir(const char *name) {
 
 int main(int argc, char **argv) {
 
-	flag = 0x02;	// use excludes
+	flag = 0;
+	flag |= 0x01;	// hide hidden files and folders
+	//flag |= 0x02;	// use excludes
+	flag |= 0x04;	// use clean printing
 
 	init();
-
-	addexclude(".git",&ex);
 
 	char *dirpath;
 
