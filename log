@@ -1,0 +1,24 @@
+0	.
+0	..
+0	.git
+1	.
+1	..
+1	branches
+	2	.
+	2	..
+1	COMMIT_EDITMSG
+1	config
+1	description
+1	HEAD
+1	hooks
+1	index
+1	info
+1	logs
+1	objects
+1	refs
+0	inc
+0	log
+0	main
+0	makefile
+0	obj
+0	src
