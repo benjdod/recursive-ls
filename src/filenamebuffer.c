@@ -2,7 +2,8 @@
 
 void append(const char *s, struct filenamebuffer *fb) {
 	if (fb->pos) {
-		fb->seq[fb->pos++] = '/';
+		if (fb->seq[fb->pos] != '/') 
+			fb->seq[fb->pos++] = '/';
 	}
 	fb->last = fb->pos;
 	int i = 0;

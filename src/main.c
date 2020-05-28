@@ -7,46 +7,57 @@
 #include "filenamebuffer.h"
 #include "chartrie.h"
 
-#define MAX_DEPTH 20
-#define HIDE_HIDDEN 0x01
-#define USE_EXCLUDES 0x02
-#define CLEAN_PRINT 0x04
-#define ESC_COLOR 0x08
+#define TERM_COLOR_RED() printf("\e[31m")
+#define TERM_COLOR_GREEN() printf("\e[32m")
+#define TERM_COLOR_YELLOW() printf("\e[33m")
+#define TERM_COLOR_BLUE() printf("\e[34m")
+#define TERM_COLOR_CYAN() printf("\e[36m")
+#define TERM_COLOR_BRIGHTRED() printf("\e[1;31m")
+#define TERM_COLOR_BRIGHTGREEN() printf("\e[1;32m")
+#define TERM_COLOR_BRIGHTYELLOW() printf("\e[1;33m")
+#define TERM_COLOR_BRIGHTBLUE() printf("\e[1;34m")
+#define TERM_COLOR_BRIGHTMAGENTA() printf("\e[1;35m")
+#define TERM_COLOR_BRIGHTCYAN() printf("\e[1;36m")
+#define TERM_COLOR_WHITE() printf("\e[37m")
+#define TERM_COLOR_RESET() printf("\e[0m")
 
-#define TERM_BRIGHTRED_COLOR() printf("\033[1;31m");
-#define TERM_CYAN_COLOR() printf("\033[36m");
-#define TERM_RESET_COLOR() printf("\033[0m");
+#define MAX_DEPTH 		20
 
-/* flag bits
- * 0: hides hidden files
- * 1: enables file/folder exclusion
- * */
+#define HIDE_HIDDEN 	0x01
+#define USE_EXCLUDES 	0x02
+#define CLEAN_PRINT 	0x04
+#define COLOR_PRINT 		0x08
+#define RECURSIVE_LIST	0x10
+#define FOLLOW_SYMLINKS	0x20
 
 unsigned int flag;
 unsigned int depth;
+unsigned char lasttype;
 struct filenamebuffer fb;
 chartrie *trie;
-char dirpath[PATH_MAX];
+char *fbstart;
+char dirpath[PATH_MAX+1];
+char fbpath[PATH_MAX+1];
 
 // forward declaring listdir
 int listdir(const char *);
 
 void printerror(const char *format, ...) {
 	va_list args;
-	if (flag & ESC_COLOR) TERM_BRIGHTRED_COLOR();
+	if (flag & COLOR_PRINT) TERM_COLOR_BRIGHTRED();
 	printf("Error: ");
 	vprintf(format, args);
 	putchar('\n');
-	if (flag & ESC_COLOR) TERM_RESET_COLOR();
+	if (flag & COLOR_PRINT) TERM_COLOR_RESET();
 }
 
 void printwarning(const char *format, ...) {
 	va_list args;
-	if (flag & ESC_COLOR) TERM_CYAN_COLOR();
+	if (flag & COLOR_PRINT) TERM_COLOR_BRIGHTMAGENTA();
 	printf("Warning: ");
 	vprintf(format, args);
 	putchar('\n');
-	if (flag & ESC_COLOR) TERM_RESET_COLOR();
+	if (flag & COLOR_PRINT) TERM_COLOR_RESET();
 }
 
 void printprompt() {
@@ -66,12 +77,18 @@ void printinvalidoption(const char *badopt) {
 	printf("Invalid option: \"%s\"",badopt);
 }
 
-// returns: negative values for errors, positive values for no ops, 0 for continue
 int processargs(int argc, char **argv) {
+	
+	// returns: negative values for errors, positive values for no ops, 0 for continue
 
 	// initial conditions
 	flag = 0;
-	flag = HIDE_HIDDEN | USE_EXCLUDES | CLEAN_PRINT;
+	flag |= HIDE_HIDDEN;
+	flag |= USE_EXCLUDES;
+	flag |= CLEAN_PRINT;
+	flag |= COLOR_PRINT;
+	flag |= FOLLOW_SYMLINKS;
+	flag |= RECURSIVE_LIST;
 
 	if (argc < 2) {
 		printprompt();
@@ -119,6 +136,12 @@ int processargs(int argc, char **argv) {
 			}
 		} else {
 			strcpy(dirpath,arg);
+			// setting the base pointer to skip over the first directory
+			if (flag & CLEAN_PRINT) {
+				unsigned int i = 0;
+				while (dirpath[i] != '\0') i++;
+				fbstart = dirpath + i;
+			}
 		}
 	}
 
@@ -127,13 +150,25 @@ int processargs(int argc, char **argv) {
 }
 
 void init() {
+
+	// reset terminal color
+	TERM_COLOR_RESET();
+
+	lasttype = DT_UNKNOWN;
+
+	fbstart = NULL;
+	dirpath = NULL;
+
 	depth = 0;
-	fb.seq = malloc((PATH_MAX + 1) * sizeof(char));
+	fb.seq = fbpath;
 	fb.pos = 0;
 
 	// sets up our excludes trie if we need it
 	if (flag & USE_EXCLUDES) {
 		trie = makenode('\0');
+	
+		// TODO: use buf for opening the file and building the tree 
+		// to save space...
 		char buf[PATH_MAX + 1];
 		char fpbuf[PATH_MAX + 1];
 
@@ -166,34 +201,91 @@ void init() {
 	}
 
 	// handles coloring flag
-	if (flag & ESC_COLOR) {
+	if (flag & COLOR_PRINT) {
 		const char *term = getenv("TERM");
-		if (strstr(term,"xterm-color") || strstr(term,"-256color")) {
-			; //we're cool
-		} else {
-			flag &= ~ESC_COLOR;
-		}
+		if (strstr(term,"xterm-color") || strstr(term,"-256color")) 
+			 ; //we're cool
+		else 
+			flag &= ~COLOR_PRINT;
 	}
 
 	return;
 }
 
 void endit() {
-	free(fb.seq);
+	// if we were using color printing, ensure that we reset 
+	// the terminal color
+	if (flag & COLOR_PRINT) TERM_COLOR_RESET();
 }
 
-int listdir(const char *name) {
+void printdir(struct dirent *dp) {
 
-	//printf("attempting to access directory %s\n",name);
+	// prints a directory from the filenamebuffer
+	
+	// TODO: print out the parent directory once every so often so that with
+	// larger outputs, we can still see what the parent folder is
+	// maybe use $LINES
+	// FIXME: when not using the . directory as the main argument, directories will
+	// print out with their parent directories using clean printing
+	
+	unsigned char type = dp->d_type;
+
+	if (flag & COLOR_PRINT && type != lasttype) {
+		switch (type) {
+			case DT_DIR:
+				TERM_COLOR_BRIGHTBLUE();
+				break;
+			case DT_LNK:
+				TERM_COLOR_BRIGHTCYAN();
+				break;
+			case DT_CHR:
+				TERM_COLOR_BRIGHTYELLOW();
+				break;
+			default:
+				TERM_COLOR_WHITE();
+		}
+
+		lasttype = type;
+	}
+
+	if (flag & CLEAN_PRINT) {
+		unsigned int i = 0;
+		unsigned int dcount = 0;
+		char c;
+		while ((c = fb.seq[i]) != '\0') {
+			if (dcount > depth) putchar(c);
+			else putchar(' ');
+			if (c == '/') dcount++;
+			i++;
+		}
+	} else {
+		printf("%s",fb.seq);
+	}
+	if (type == DT_DIR) putchar('/');
+	if (type == DT_REG) putchar('*');
+	if (type == DT_LNK) {
+		printf(" -> ");
+		// FIXME: this is bad
+		char *rp = realpath(fb.seq,NULL);
+		printf("%s",rp);
+		// we can get rid of malloc!
+		free(rp);
+	}
+	putchar('\n');
+}
+
+int listdir(const char *path) {
+
+	//printf("attempting to access directory %s\n",path);
 
 	if (depth >= MAX_DEPTH) return 0;
 
 	if (flag & USE_EXCLUDES) {
-		if (match(name,trie)) return 0;
+		if (match(path,trie)) return 0;
 	}
 
 	// opening stream and erro checking
-	DIR *dirpointer = opendir(name);
+	DIR *dirpointer = opendir(path);
 	if (dirpointer == NULL) {
 
 		// don't return an error for failed accesses if we're recursing
@@ -211,7 +303,7 @@ int listdir(const char *name) {
 				printerror("too many symbolic links were encountered to resolve the path");
 				break;
 			case ENAMETOOLONG:
-				printerror("real path name exceeds maximum path length (PATH_MAX)");
+				printerror("real path path exceeds maximum path length (PATH_MAX)");
 				break;
 			case ENOENT:
 				printerror("directory does not exist");
@@ -233,7 +325,8 @@ int listdir(const char *name) {
 		return errno;
 	}
 
-	// main loop
+	// FIXME: I don't think closedir means anything once we've looped
+	// through all the files
 	while (dirpointer) {
 
 		errno = 0;
@@ -262,39 +355,24 @@ int listdir(const char *name) {
 		}
 
 		if ((strcmp(dp->d_name,".") == 0 || strcmp(dp->d_name,"..") == 0))
-			; // do nothing
-		else {
-			if (flag & USE_EXCLUDES) {
-				if (match(dp->d_name,trie)) continue;
-			}
-			if (flag & HIDE_HIDDEN) {
-				if (dp->d_name[0] == '.') continue;
-			}
-			append(dp->d_name,&fb);
+			continue; // do nothing
+		if (flag & USE_EXCLUDES && match(dp->d_name,trie))
+			continue; 
+		if (flag & HIDE_HIDDEN && dp->d_name[0] == '.') 
+			continue;	
 
-			if (flag & CLEAN_PRINT) {
-				unsigned int i = 0;
-				unsigned int dcount = 0;
-				char c;
-				while ((c = fb.seq[i]) != '\0') {
-					if (dcount > depth) putchar(c);
-					else putchar(' ');
-					if (c == '/') dcount++;
-					i++;
-				}
-				if (dp->d_type == DT_DIR) putchar('/');
-				putchar('\n');
-			} else {
-				printf("%s\n",fb.seq);
-			}
+		append(dp->d_name,&fb);
 
-			if (dp->d_type == DT_DIR) {
-				depth++;
-				listdir(fb.seq);
-				depth--;
-			}
-			removelast(&fb);
+		printdir(dp);
+
+		if (flag & RECURSIVE_LIST && 
+				(dp->d_type == DT_DIR || 
+				 (dp->d_type == DT_LNK && (flag & FOLLOW_SYMLINKS)))) {
+			depth++;
+			listdir(fb.seq);
+			depth--;
 		}
+		removelast(&fb);
 	}
 
 	closedir(dirpointer);
@@ -306,8 +384,11 @@ int main(int argc, char **argv) {
 	int r = processargs(argc, argv);
 	if (r < 0) return r;
 	else if (r) return 0;
-
 	init();
+
+
+	printwarning("test warning");
+	printerror("test erro");
 
 	append(dirpath,&fb);
 	listdir(dirpath);
