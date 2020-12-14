@@ -11,9 +11,11 @@ This is a simple CLI tool to view the files in a given directory. This tool is n
 
 ### Building
 
+This project will only build on Linux as far as I know.
+
 ```
 cd build && cmake ..
 make
 ```
 
-And you're done.
+The executable will be generated in a file called `els`.
