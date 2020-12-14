@@ -1,15 +1,16 @@
 .PHONY: run all clean test print
 
+EXEC=els
 COMPILER=gcc
 SRC=./src
 OBJ=./obj
 OBJS=$(addprefix $(OBJ)/,$(patsubst %.c,%.o,$(notdir $(wildcard src/*.c))))
 INCFLAG=-I./inc
 
-run: ./main
-	./main
+run: ./$(EXEC)
+	./$(EXEC)
 
-./main: $(OBJS) 
+./$(EXEC): $(OBJS) 
 	$(COMPILER) $(INCFLAG) -o $@ $^
 
 $(OBJ)/%.o: $(SRC)/%.c

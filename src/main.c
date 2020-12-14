@@ -4,6 +4,8 @@
 #include <dirent.h>
 #include <stdarg.h>
 #include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
 #include "filenamebuffer.h"
 #include "chartrie.h"
 
@@ -32,8 +34,10 @@
 
 unsigned int flag;
 unsigned int depth;
+unsigned int maxdepth;
 unsigned char lasttype;
 struct filenamebuffer fb;
+struct stat fs;
 chartrie *trie;
 char *fbstart;
 char dirpath[PATH_MAX+1];
@@ -65,12 +69,22 @@ void printprompt() {
 }
 
 void printusage() {
-	printf("efind [options] directory\n");
+	printf("--- els v0.1.0 ---\n");
+	printf("els [options] directory\n");
+	printf("-a (--showhidden): show hidden files and folders\n");
+	printf("-i (--includeall): ignore excludes (in ~/.els.excludes)\n");
+	printf("-A (--all): same as -a -i\n");
+	printf("-f (--full): full filepath printing\n");
+	printf("-l (--followlinks): follow symlinks\n");
+	printf("-r (--recursive): recursively list subdirectories\n");
+	printf("--nocolor: print without terminal colors\n");
+	printf("-h (--help): print help and exit\n");
+	printf("-v (--version): print version and exit\n");
 }
 
 void printversion() {
 	printf("efind (v. 0.1.0)\n");
-	printf("a new and improved find utility...\n");
+	printf("a new and improved ls utility...\n");
 }
 
 void printinvalidoption(const char *badopt) {
@@ -81,18 +95,20 @@ int processargs(int argc, char **argv) {
 	
 	// returns: negative values for errors, positive values for no ops, 0 for continue
 
-	// initial conditions
+	// initial flag conditions
 	flag = 0;
 	flag |= HIDE_HIDDEN;
 	flag |= USE_EXCLUDES;
 	flag |= CLEAN_PRINT;
 	flag |= COLOR_PRINT;
-	flag |= FOLLOW_SYMLINKS;
-	flag |= RECURSIVE_LIST;
+
+	// default maxdepth
+	maxdepth = MAX_DEPTH;
 
 	if (argc < 2) {
-		printprompt();
-	 	return -1;
+		dirpath[0] = '.';
+		dirpath[1] = '\0';
+		return 0;
 	}
 	if (argv[1][0] == '\0') {
 		printprompt();
@@ -107,42 +123,93 @@ int processargs(int argc, char **argv) {
 		arg = argv[i];
 
 		if (arg[0] == '-') {
-			j = 1;
-			while (arg[j] != '\0') {
-				switch (arg[j]) {
-					case 'h':
-						printusage();
-						return 1;
-					case 'v':
-						printversion();
-						return 2;
-					case 'a':
-						// show hidden files
-						flag &= ~HIDE_HIDDEN;
-						break;
-					case 'A':
-						// show hidden files and ignore excludes
-						flag &= ~HIDE_HIDDEN;
-						flag &= ~USE_EXCLUDES;
-						break;
-					case 'f':
-						flag &= ~CLEAN_PRINT;
-						break;
-					default:
-						printinvalidoption(arg);
-						return -1;
+			if (arg[1] == '-') {
+				if (!strcmp(arg,"--maxdepth")) {
+					maxdepth = atoi(argv[++i]);
 				}
-				j++;
+				if (!strcmp(arg,"--help")) {
+					printusage();
+					return 1;
+				}
+				if (!strcmp(arg,"--version")) {
+					printversion();
+					return 1;
+				}
+				if (!strcmp(arg,"--showhidden")) {
+					flag &= ~HIDE_HIDDEN;
+					continue;
+				}
+				if (!strcmp(arg,"--includeall")) {
+					flag &= ~USE_EXCLUDES;
+					continue;
+				}
+				if (!strcmp(arg,"--all")) {
+					flag &= ~USE_EXCLUDES;
+					flag &= ~HIDE_HIDDEN;
+					continue;
+				}
+				if (!strcmp(arg,"--followlinks")) {
+					flag |= FOLLOW_SYMLINKS;
+					continue;
+				}
+				if (!strcmp(arg,"--recursive")) {
+					flag |= RECURSIVE_LIST;
+					continue;
+				}
+				if (!strcmp(arg,"--full")) {
+					flag &= ~CLEAN_PRINT;
+					continue;
+				}
+				if (!strcmp(arg,"--nocolor")) {
+					flag &= ~COLOR_PRINT;
+					continue;
+				}
+				continue;
+			} else {
+				j = 1;
+				while (arg[j] != '\0') {
+					switch (arg[j]) {
+						case 'h':
+							printusage();
+							return 1;
+						case 'v':
+							printversion();
+							return 2;
+						case 'a':
+							// show hidden files
+							flag &= ~HIDE_HIDDEN;
+							break;
+						case 'i':
+							flag &= ~USE_EXCLUDES;
+						case 'A':
+							// show hidden files and ignore excludes
+							flag &= ~HIDE_HIDDEN;
+							flag &= ~USE_EXCLUDES;
+							break;
+						case 'f':
+							flag &= ~CLEAN_PRINT;
+							break;
+						case 'l':
+							flag |= FOLLOW_SYMLINKS;
+							break;
+						case 'r':
+							flag |= RECURSIVE_LIST;
+							break;
+						default:
+							printf("Warning: skipping invalid option '%c'\n",arg[j]);
+					}
+					j++;
+				}
 			}
+
 		} else {
 			strcpy(dirpath,arg);
-			// setting the base pointer to skip over the first directory
-			if (flag & CLEAN_PRINT) {
-				unsigned int i = 0;
-				while (dirpath[i] != '\0') i++;
-				fbstart = dirpath + i;
-			}
 		}
+	}
+
+	if (dirpath[0] == '\0') {
+		dirpath[0] = '.';
+		dirpath[1] = '\0';
 	}
 
 	return 0;
@@ -156,12 +223,14 @@ void init() {
 
 	lasttype = DT_UNKNOWN;
 
-	fbstart = NULL;
-	dirpath = NULL;
-
 	depth = 0;
 	fb.seq = fbpath;
 	fb.pos = 0;
+
+	short fboffset = 0;
+	while (dirpath[fboffset] != '\0') fboffset++;
+	fbstart = fb.seq + fboffset;
+	fbstart++;
 
 	// sets up our excludes trie if we need it
 	if (flag & USE_EXCLUDES) {
@@ -178,7 +247,7 @@ void init() {
 		while (fpbuf[i] != '\0') i++;
 		fpbuf[i++] = '/';
 		fpbuf[i] = '\0';
-		strcat(fpbuf+i, ".efind.excludes");
+		strcat(fpbuf+i, ".els.excludes");
 
 		// TODO: move this opening stuff to a new function somewhere else
 		FILE *excludesfp = fopen(fpbuf,"r");
@@ -196,7 +265,7 @@ void init() {
 			fclose(excludesfp);
 		} else {
 			// TODO: finish warnings here...
-			printwarning("excludes file could not be located, proceeding without.\nEnsure that there is a .efind.excludes file in your home directory");
+			printwarning("excludes file could not be located, proceeding without.\nEnsure that there is a .els.excludes file in your home directory");
 		}
 	}
 
@@ -236,6 +305,7 @@ void printdir(struct dirent *dp) {
 				TERM_COLOR_BRIGHTBLUE();
 				break;
 			case DT_LNK:
+				// TODO: use lstat() to check status of links
 				TERM_COLOR_BRIGHTCYAN();
 				break;
 			case DT_CHR:
@@ -252,8 +322,11 @@ void printdir(struct dirent *dp) {
 		unsigned int i = 0;
 		unsigned int dcount = 0;
 		char c;
-		while ((c = fb.seq[i]) != '\0') {
-			if (dcount > depth) putchar(c);
+		while ((c = fbstart[i]) != '\0') {
+			// NOTE: add value to dcount to increase the number of parent 
+			// directories printed
+			if (dcount >= depth)
+				putchar(c);
 			else putchar(' ');
 			if (c == '/') dcount++;
 			i++;
@@ -262,10 +335,11 @@ void printdir(struct dirent *dp) {
 		printf("%s",fb.seq);
 	}
 	if (type == DT_DIR) putchar('/');
-	if (type == DT_REG) putchar('*');
+	//if (type == DT_REG) putchar('*');
 	if (type == DT_LNK) {
 		printf(" -> ");
 		// FIXME: this is bad
+		// from real world use, this is also horribly slow
 		char *rp = realpath(fb.seq,NULL);
 		printf("%s",rp);
 		// we can get rid of malloc!
@@ -276,9 +350,9 @@ void printdir(struct dirent *dp) {
 
 int listdir(const char *path) {
 
-	//printf("attempting to access directory %s\n",path);
+//	printf("attempting to access directory %s\n",path);
 
-	if (depth >= MAX_DEPTH) return 0;
+	if (depth >= maxdepth) return 0;
 
 	if (flag & USE_EXCLUDES) {
 		if (match(path,trie)) return 0;
@@ -312,7 +386,7 @@ int listdir(const char *path) {
 				printerror("path is not a directory");
 				break;
 			case EMFILE:
-				printerror("currently at file descriptor limit (OPEN_MAX)");
+				printerror("currently at the open file limit of this machine");
 				break;
 			case ENFILE:
 				printerror("too many files are currently open on the system");
@@ -321,7 +395,6 @@ int listdir(const char *path) {
 				printerror("error opening the directory");
 		}
 
-		closedir(dirpointer);
 		return errno;
 	}
 
@@ -384,11 +457,11 @@ int main(int argc, char **argv) {
 	int r = processargs(argc, argv);
 	if (r < 0) return r;
 	else if (r) return 0;
+
 	init();
 
-
-	printwarning("test warning");
-	printerror("test erro");
+//	printwarning("test warning");
+//	printerror("test erro");
 
 	append(dirpath,&fb);
 	listdir(dirpath);
