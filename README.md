@@ -6,6 +6,7 @@ This is a simple CLI tool to view the files in a given directory. This tool is n
 	- Prints symlinks
 	- Color support for ANSI terminals
 	- Selective file/folder exclusion
+	- *`els -h` for complete options*
 
 `els` also supports selectively ignoring certain files from being listed. In this way, it's good for at-a-glance printouts where you want to see hidden files but not necessarily your `.git` directory. You can set the files/folders which need to be excluded in `~/.els.excludes`.
 
